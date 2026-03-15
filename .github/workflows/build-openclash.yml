@@ -1,14 +1,14 @@
-name: Build Nikki
+name: Build OpenClash
 
 on:
   workflow_dispatch:
   push:
     branches:
+      - master
       - main
     paths:
-      - 'nikki/**'
-      - 'luci-app-nikki/**'
-      - '.github/workflows/build-nikki.yml'
+      - 'luci-app-openclash/**'
+      - '.github/workflows/build-openclash.yml'
 
 jobs:
   build:
@@ -22,14 +22,8 @@ jobs:
             sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/armsr/armv8/openwrt-sdk-24.10.5-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
             sdk_archive: openwrt-sdk-24.10.5-armsr-armv8_gcc-13.3.0_musl.Linux-x86_64.tar.zst
 
-          - arch: aarch64_cortex-a72
-            sdk_target: bcm27xx-bcm2711
-            sdk_url: https://downloads.openwrt.org/releases/24.10.5/targets/bcm27xx/bcm2711/openwrt-sdk-24.10.5-bcm27xx-bcm2711_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-            sdk_archive: openwrt-sdk-24.10.5-bcm27xx-bcm2711_gcc-13.3.0_musl.Linux-x86_64.tar.zst
-
     env:
-      PACKAGE_NAME: nikki
-      LUCI_PACKAGE_NAME: luci-app-nikki
+      PACKAGE_NAME: luci-app-openclash
 
     steps:
       - name: Checkout source
@@ -37,17 +31,16 @@ jobs:
 
       - name: Read package version
         run: |
-          PKG_VERSION=$(sed -n 's/^PKG_VERSION:=//p' luci-app-nikki/Makefile | head -n1 | tr -d '[:space:]')
+          PKG_VERSION=$(sed -n 's/^PKG_VERSION:=//p' luci-app-openclash/Makefile | head -n1 | tr -d '[:space:]')
           if [ -z "$PKG_VERSION" ]; then
-            echo "PKG_VERSION not found in luci-app-nikki/Makefile"
+            echo "PKG_VERSION not found in luci-app-openclash/Makefile"
             exit 1
           fi
 
           echo "PKG_VERSION=$PKG_VERSION" >> "$GITHUB_ENV"
-          echo "ARCHIVE_NAME=nikki-${{ matrix.arch }}-$PKG_VERSION.tar.gz" >> "$GITHUB_ENV"
+          echo "IPK_NAME=luci-app-openclash_${PKG_VERSION}_all.ipk" >> "$GITHUB_ENV"
 
           echo "Using PKG_VERSION=$PKG_VERSION"
-          echo "Using ARCHIVE_NAME=nikki-${{ matrix.arch }}-$PKG_VERSION.tar.gz"
 
       - name: Install build dependencies
         run: |
@@ -84,14 +77,11 @@ jobs:
           echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
           echo "Using SDK_DIR=$SDK_DIR"
 
-      - name: Prepare custom feed packages
+      - name: Prepare custom feed package
         run: |
           mkdir -p "$SDK_DIR/package/custom"
-          rm -rf "$SDK_DIR/package/custom/nikki"
-          rm -rf "$SDK_DIR/package/custom/luci-app-nikki"
-
-          cp -r "$GITHUB_WORKSPACE/nikki" "$SDK_DIR/package/custom/nikki"
-          cp -r "$GITHUB_WORKSPACE/luci-app-nikki" "$SDK_DIR/package/custom/luci-app-nikki"
+          rm -rf "$SDK_DIR/package/custom/luci-app-openclash"
+          cp -r "$GITHUB_WORKSPACE/luci-app-openclash" "$SDK_DIR/package/custom/luci-app-openclash"
 
       - name: Update feeds
         working-directory: ${{ env.SDK_DIR }}
@@ -102,34 +92,34 @@ jobs:
       - name: Generate config
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          echo "CONFIG_PACKAGE_nikki=m" >> .config
-          echo "CONFIG_PACKAGE_luci-app-nikki=m" >> .config
+          echo "CONFIG_PACKAGE_luci-app-openclash=m" >> .config
           make defconfig
 
-      - name: Build packages
+      - name: Build package
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          make package/custom/nikki/compile V=s -j"$(nproc)"
-          make package/custom/luci-app-nikki/compile V=s -j"$(nproc)"
+          make package/custom/luci-app-openclash/compile V=s -j"$(nproc)"
 
-      - name: Collect IPK files
+      - name: Locate built IPK
         run: |
-          mkdir -p "artifacts/${{ matrix.arch }}"
-          find "$SDK_DIR/bin/packages" -type f \( -name 'nikki_*.ipk' -o -name 'luci-app-nikki_*.ipk' \) -exec cp -v {} "artifacts/${{ matrix.arch }}/" \;
-          ls -lh "artifacts/${{ matrix.arch }}/"
+          IPK_PATH=$(find "$SDK_DIR/bin/packages" -type f -name 'luci-app-openclash_*.ipk' | head -n 1)
 
-      - name: Create tar.gz like upstream
-        run: |
-          tar -czf "$ARCHIVE_NAME" -C "artifacts/${{ matrix.arch }}" .
-          ls -lh "$ARCHIVE_NAME"
+          if [ -z "$IPK_PATH" ]; then
+            echo "IPK file not found"
+            exit 1
+          fi
+
+          echo "IPK_PATH=$IPK_PATH" >> "$GITHUB_ENV"
+          echo "Using IPK_PATH=$IPK_PATH"
+          ls -lh "$IPK_PATH"
 
       - name: Generate SHA256
         run: |
-          sha256sum "$ARCHIVE_NAME" | awk '{print $1}' > sha256.txt
+          sha256sum "$IPK_PATH" | awk '{print $1}' > sha256.txt
           echo "SHA256=$(cat sha256.txt)" >> "$GITHUB_ENV"
           cat sha256.txt
 
-      - name: Upload file to API endpoint
+      - name: Upload IPK to API endpoint
         env:
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_API_KEY: ${{ secrets.UPLOAD_API_KEY }}
@@ -138,17 +128,11 @@ jobs:
             curl --fail --show-error --silent \
               -X POST "$UPLOAD_URL" \
               -H "Authorization: Bearer $UPLOAD_API_KEY" \
-              -F "file=@$ARCHIVE_NAME" \
+              -F "file=@$IPK_PATH" \
               -F "category=ipk_mod" \
               -F "subfolder=${{ matrix.arch }}" \
               -F "repository=${{ github.repository }}" \
-              -F "sha256=${SHA256}" \
-              -F "notify_telegram=1" \
-              -F "pkg_name=nikki" \
-              -F "pkg_version=${PKG_VERSION}" \
-              -F "arch=${{ matrix.arch }}" \
-              -F "mod_name=MahaVPN" \
-              -F "caption_title=Nikki build automation"
+              -F "sha256=${SHA256}"
           )"
 
           python3 - <<'PY' "$RESPONSE"
@@ -159,6 +143,12 @@ jobs:
               import json as _json
               print(_json.dumps(data["data"], indent=2))
           PY
+
+      - name: Upload artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclash-${{ matrix.arch }}-${{ env.PKG_VERSION }}
+          path: ${{ env.IPK_PATH }}
 
       - name: Done
         run: echo "Build uploaded successfully"
