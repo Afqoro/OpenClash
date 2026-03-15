@@ -24,15 +24,22 @@ jobs:
 
     env:
       PACKAGE_NAME: luci-app-openclash
+      TZ: Asia/Jakarta
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v5
 
+      - name: Init build log
+        run: |
+          : > "$RUNNER_TEMP/build.log"
+          echo "[$(date '+%H:%M:%S')] checkout....OK" >> "$RUNNER_TEMP/build.log"
+
       - name: Read package version
         run: |
           PKG_VERSION=$(sed -n 's/^PKG_VERSION:=//p' luci-app-openclash/Makefile | head -n1 | tr -d '[:space:]')
           if [ -z "$PKG_VERSION" ]; then
+            echo "[$(date '+%H:%M:%S')] read ver    FAIL" >> "$RUNNER_TEMP/build.log"
             echo "PKG_VERSION not found in luci-app-openclash/Makefile"
             exit 1
           fi
@@ -41,14 +48,19 @@ jobs:
           echo "IPK_NAME=luci-app-openclash_${PKG_VERSION}_all.ipk" >> "$GITHUB_ENV"
 
           echo "Using PKG_VERSION=$PKG_VERSION"
+          echo "[$(date '+%H:%M:%S')] read ver....OK" >> "$RUNNER_TEMP/build.log"
 
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          if sudo apt-get update && sudo apt-get install -y \
             build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
             gettext git libncurses5-dev libssl-dev rsync unzip zlib1g-dev \
-            file wget subversion swig time tar zstd python3 python3-pip python3-setuptools curl
+            file wget subversion swig time tar zstd python3 python3-pip python3-setuptools curl; then
+            echo "[$(date '+%H:%M:%S')] deps........OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] deps........FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
 
       - name: Cache SDK archive
         uses: actions/cache@v4
@@ -59,29 +71,42 @@ jobs:
       - name: Download OpenWrt SDK
         run: |
           if [ ! -f "${{ matrix.sdk_archive }}" ]; then
-            wget -O "${{ matrix.sdk_archive }}" "${{ matrix.sdk_url }}"
+            if ! wget -O "${{ matrix.sdk_archive }}" "${{ matrix.sdk_url }}"; then
+              echo "[$(date '+%H:%M:%S')] sdk dl......FAIL" >> "$RUNNER_TEMP/build.log"
+              exit 1
+            fi
           fi
+
           ls -lh "${{ matrix.sdk_archive }}"
+          echo "[$(date '+%H:%M:%S')] sdk dl......OK" >> "$RUNNER_TEMP/build.log"
 
       - name: Extract OpenWrt SDK
         run: |
           find . -maxdepth 1 -type d -name 'openwrt-sdk-*' -exec rm -rf {} +
-          tar --use-compress-program=unzstd -xf "${{ matrix.sdk_archive }}"
+
+          if ! tar --use-compress-program=unzstd -xf "${{ matrix.sdk_archive }}"; then
+            echo "[$(date '+%H:%M:%S')] sdk xtract..FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
           SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
 
           if [ -z "$SDK_DIR" ]; then
+            echo "[$(date '+%H:%M:%S')] sdk xtract  FAIL" >> "$RUNNER_TEMP/build.log"
             echo "SDK_DIR not found after extraction"
             exit 1
           fi
 
           echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
           echo "Using SDK_DIR=$SDK_DIR"
+          echo "[$(date '+%H:%M:%S')] sdk xtract..OK" >> "$RUNNER_TEMP/build.log"
 
       - name: Prepare custom feed package
         run: |
           mkdir -p "$SDK_DIR/package/custom"
           rm -rf "$SDK_DIR/package/custom/luci-app-openclash"
           cp -r "$GITHUB_WORKSPACE/luci-app-openclash" "$SDK_DIR/package/custom/luci-app-openclash"
+          echo "[$(date '+%H:%M:%S')] prep feed...OK" >> "$RUNNER_TEMP/build.log"
 
       - name: Build and install po2lmo
         run: |
@@ -90,6 +115,7 @@ jobs:
           PO2LMO_DIR="$SDK_DIR/package/custom/luci-app-openclash/tools/po2lmo"
 
           if [ ! -d "$PO2LMO_DIR" ]; then
+            echo "[$(date '+%H:%M:%S')] po2lmo      FAIL" >> "$RUNNER_TEMP/build.log"
             echo "po2lmo source dir not found: $PO2LMO_DIR"
             exit 1
           fi
@@ -103,37 +129,55 @@ jobs:
           elif [ -f "$PO2LMO_DIR/po2lmo" ]; then
             install -m0755 "$PO2LMO_DIR/po2lmo" "$SDK_DIR/staging_dir/host/bin/po2lmo"
           else
+            echo "[$(date '+%H:%M:%S')] po2lmo......FAIL" >> "$RUNNER_TEMP/build.log"
             echo "Built po2lmo binary not found"
             find "$PO2LMO_DIR" -maxdepth 3 -type f
             exit 1
           fi
 
           "$SDK_DIR/staging_dir/host/bin/po2lmo" --help || true
-        
+          echo "[$(date '+%H:%M:%S')] po2lmo......OK" >> "$RUNNER_TEMP/build.log"
+
       - name: Update feeds
         working-directory: ${{ env.SDK_DIR }}
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install luci
+          if ./scripts/feeds update -a && ./scripts/feeds install luci; then
+            echo "[$(date '+%H:%M:%S')] feeds.......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] feeds.......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
 
       - name: Generate config
         working-directory: ${{ env.SDK_DIR }}
         run: |
           echo "CONFIG_PACKAGE_luci-app-openclash=m" >> .config
-          make defconfig
+          if make defconfig; then
+            echo "[$(date '+%H:%M:%S')] defconfig...OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] defconfig...FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
 
       - name: Build package
         working-directory: ${{ env.SDK_DIR }}
         run: |
           export PATH="$PWD/staging_dir/host/bin:$PATH"
           which po2lmo || true
-          make package/custom/luci-app-openclash/compile V=s -j"$(nproc)"
+
+          if make package/custom/luci-app-openclash/compile V=s -j"$(nproc)"; then
+            echo "[$(date '+%H:%M:%S')] build.......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] build.......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
 
       - name: Locate built IPK
         run: |
           IPK_PATH=$(find "$SDK_DIR/bin/packages" -type f -name 'luci-app-openclash_*.ipk' | head -n 1)
 
           if [ -z "$IPK_PATH" ]; then
+            echo "[$(date '+%H:%M:%S')] locate ipk..FAIL" >> "$RUNNER_TEMP/build.log"
             echo "IPK file not found"
             exit 1
           fi
@@ -141,12 +185,18 @@ jobs:
           echo "IPK_PATH=$IPK_PATH" >> "$GITHUB_ENV"
           echo "Using IPK_PATH=$IPK_PATH"
           ls -lh "$IPK_PATH"
+          echo "[$(date '+%H:%M:%S')] locate ipk..OK" >> "$RUNNER_TEMP/build.log"
 
       - name: Generate SHA256
         run: |
-          sha256sum "$IPK_PATH" | awk '{print $1}' > sha256.txt
-          echo "SHA256=$(cat sha256.txt)" >> "$GITHUB_ENV"
-          cat sha256.txt
+          if sha256sum "$IPK_PATH" | awk '{print $1}' > sha256.txt; then
+            echo "SHA256=$(cat sha256.txt)" >> "$GITHUB_ENV"
+            cat sha256.txt
+            echo "[$(date '+%H:%M:%S')] sha256......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] sha256......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
 
       - name: Upload IPK to API endpoint
         env:
@@ -159,8 +209,6 @@ jobs:
 
           <b>● File:</b> $PACKAGE_NAME
           <b>● Version:</b> $PKG_VERSION
-          <b>● Repo:</b> ${{ github.repository }}
-          <b>● SHA256:</b> <code>$SHA256</code>
 
           <b>● Archive:</b> <code>$(basename "$IPK_PATH")</code>
           EOF
@@ -183,6 +231,8 @@ jobs:
               --form-string "caption=$CAPTION"
           )"
 
+          echo "[$(date '+%H:%M:%S')] upload......OK" >> "$RUNNER_TEMP/build.log"
+          
           python3 - <<'PY' "$RESPONSE"
           import json, sys
           data = json.loads(sys.argv[1])
@@ -199,4 +249,6 @@ jobs:
           path: ${{ env.IPK_PATH }}
 
       - name: Done
-        run: echo "Build uploaded successfully"
+        run: |
+          echo "[$(date '+%H:%M:%S')] success.....OK" >> "$RUNNER_TEMP/build.log"
+          echo "Build uploaded successfully"
