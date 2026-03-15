@@ -70,6 +70,7 @@ function index()
 	entry({"admin", "services", "openclash", "announcement"}, call("action_announcement"))
 	entry({"admin", "services", "openclash", "settings"},cbi("openclash/settings"),_("Plugin Settings"), 30).leaf = true
 	entry({"admin", "services", "openclash", "config-overwrite"},cbi("openclash/config-overwrite"),_("Overwrite Settings"), 40).leaf = true
+	entry({"admin", "services", "openclash", "servers"},cbi("openclash/servers"),_("Onekey Create"), 50).leaf = true	
 	entry({"admin", "services", "openclash", "config-subscribe"},cbi("openclash/config-subscribe"),_("Config Subscribe"), 60).leaf = true
 	entry({"admin", "services", "openclash", "servers"},cbi("openclash/servers"),nil).leaf = true
 	entry({"admin", "services", "openclash", "other-rules-edit"},cbi("openclash/other-rules-edit"), nil).leaf = true
@@ -82,6 +83,7 @@ function index()
 	entry({"admin", "services", "openclash", "groups-config"},cbi("openclash/groups-config"), nil).leaf = true
 	entry({"admin", "services", "openclash", "proxy-provider-config"},cbi("openclash/proxy-provider-config"), nil).leaf = true
 	entry({"admin", "services", "openclash", "config"},form("openclash/config"),_("Config Manage"), 80).leaf = true
+	entry({"admin", "services", "openclash", "oceditor"}, template("openclash/oceditor"), _("Config Editor"), 85).leaf = true	
 	entry({"admin", "services", "openclash", "log"},cbi("openclash/log"),_("Server Logs"), 90).leaf = true
 	entry({"admin", "services", "openclash", "myip_check"}, call("action_myip_check"))
 	entry({"admin", "services", "openclash", "website_check"}, call("action_website_check"))
@@ -1772,17 +1774,53 @@ function process_status(name)
 end
 
 function action_announcement()
-	if not fs.access("/tmp/openclash_announcement") or fs.readfile("/tmp/openclash_announcement") == "" or fs.mtime("/tmp/openclash_announcement") < (os.time() - 86400) then
-		local HTTP_CODE = luci.sys.exec("curl -SsL -m 5 -w '%{http_code}' -o /tmp/openclash_announcement https://raw.githubusercontent.com/vernesong/OpenClash/dev/announcement 2>/dev/null")
-		if HTTP_CODE ~= "200" then
-			fs.unlink("/tmp/openclash_announcement")
-		end
-	end
-	local info = luci.sys.exec("cat /tmp/openclash_announcement 2>/dev/null") or ""
-	luci.http.prepare_content("application/json")
-	luci.http.write_json({
-		content = info;
-	})
+    local main_file = "/tmp/openclash_announcement"
+    local custom_file = "/tmp/openclash_announcement_custom"
+
+    local main_url = "https://raw.githubusercontent.com/vernesong/OpenClash/dev/announcement"
+    local custom_url = "https://raw.githubusercontent.com/GboyGud/update_fix/main/openclash/announcement_custom.json"
+
+    -- download helper (refresh per 24 jam)
+    local function ensure_fresh(path, url)
+        if not fs.access(path) or fs.readfile(path) == "" or fs.mtime(path) < (os.time() - 86400) then
+            local cmd = string.format("curl -SsL -m 5 -w '%%{http_code}' -o %s %s 2>/dev/null", path, url)
+            local code = luci.sys.exec(cmd)
+            if code ~= "200" then
+                fs.unlink(path)
+            end
+        end
+    end
+
+    ensure_fresh(main_file, main_url)
+    ensure_fresh(custom_file, custom_url)
+
+    local info = luci.sys.exec("cat " .. main_file .. " 2>/dev/null") or ""
+    local custom = luci.sys.exec("cat " .. custom_file .. " 2>/dev/null") or ""
+
+				-- merge JSON arrays (CUSTOM dulu, lalu MAIN)
+				if custom ~= "" then
+								info = info:gsub("^%s+", ""):gsub("%s+$", "")
+								custom = custom:gsub("^%s+", ""):gsub("%s+$", "")
+
+								if custom:match("^%s*%[") and info:match("^%s*%[") then
+												custom = custom:gsub("%]%s*$", "")
+												info = info:gsub("^%s*%[", ""):gsub("%]%s*$", "")
+
+												if custom:match("%S") and info:match("%S") then
+																info = custom .. "," .. info .. "]"
+												elseif custom:match("%S") then
+																info = custom .. "]"
+												else
+																info = "[" .. info .. "]"
+												end
+								else
+												-- fallback kalau format tidak sesuai
+												info = custom .. "\n" .. info
+								end
+				end
+
+    luci.http.prepare_content("application/json")
+    luci.http.write_json({ content = info })
 end
 
 function action_myip_check()
