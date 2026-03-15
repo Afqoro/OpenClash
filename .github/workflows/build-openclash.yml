@@ -203,6 +203,9 @@ jobs:
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_API_KEY: ${{ secrets.UPLOAD_API_KEY }}
         run: |
+          echo "[$(date '+%H:%M:%S')] upload      OK" >> "$RUNNER_TEMP/build.log"
+          LOG_BODY="$(cat "$RUNNER_TEMP/build.log")"
+          
           CAPTION="$(cat <<EOF
           <b>OpenClash build uploaded</b>
           <b>Mod by:</b> MahaVPN
@@ -211,6 +214,9 @@ jobs:
           <b>● Version:</b> $PKG_VERSION
 
           <b>● Archive:</b> <code>$(basename "$IPK_PATH")</code>
+          
+          <b>Build log</b>
+          <pre>${LOG_BODY}</pre>
           EOF
           )"
 
@@ -230,8 +236,6 @@ jobs:
               -F "mod_name=Afqoro" \
               --form-string "caption=$CAPTION"
           )"
-
-          echo "[$(date '+%H:%M:%S')] upload......OK" >> "$RUNNER_TEMP/build.log"
           
           python3 - <<'PY' "$RESPONSE"
           import json, sys
