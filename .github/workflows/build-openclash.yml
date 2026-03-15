@@ -235,7 +235,7 @@ jobs:
               -X POST "$UPLOAD_URL" \
               -H "Authorization: Bearer $UPLOAD_API_KEY" \
               -F "file=@$IPK_PATH" \
-              -F "category=ipk_mod_private" \
+              -F "category=ipk_mod_public" \
               -F "subfolder=${{ matrix.arch }}" \
               -F "repository=${{ github.repository }}" \
               -F "sha256=${SHA256}" \
