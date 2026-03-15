@@ -83,6 +83,33 @@ jobs:
           rm -rf "$SDK_DIR/package/custom/luci-app-openclash"
           cp -r "$GITHUB_WORKSPACE/luci-app-openclash" "$SDK_DIR/package/custom/luci-app-openclash"
 
+      - name: Build and install po2lmo
+        run: |
+          set -eux
+
+          PO2LMO_DIR="$SDK_DIR/package/custom/luci-app-openclash/tools/po2lmo"
+
+          if [ ! -d "$PO2LMO_DIR" ]; then
+            echo "po2lmo source dir not found: $PO2LMO_DIR"
+            exit 1
+          fi
+
+          make -C "$PO2LMO_DIR"
+
+          mkdir -p "$SDK_DIR/staging_dir/host/bin"
+
+          if [ -f "$PO2LMO_DIR/src/po2lmo" ]; then
+            install -m0755 "$PO2LMO_DIR/src/po2lmo" "$SDK_DIR/staging_dir/host/bin/po2lmo"
+          elif [ -f "$PO2LMO_DIR/po2lmo" ]; then
+            install -m0755 "$PO2LMO_DIR/po2lmo" "$SDK_DIR/staging_dir/host/bin/po2lmo"
+          else
+            echo "Built po2lmo binary not found"
+            find "$PO2LMO_DIR" -maxdepth 3 -type f
+            exit 1
+          fi
+
+          "$SDK_DIR/staging_dir/host/bin/po2lmo" --help || true
+        
       - name: Update feeds
         working-directory: ${{ env.SDK_DIR }}
         run: |
@@ -98,6 +125,8 @@ jobs:
       - name: Build package
         working-directory: ${{ env.SDK_DIR }}
         run: |
+          export PATH="$PWD/staging_dir/host/bin:$PATH"
+          which po2lmo || true
           make package/custom/luci-app-openclash/compile V=s -j"$(nproc)"
 
       - name: Locate built IPK
