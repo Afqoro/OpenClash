@@ -226,7 +226,7 @@ jobs:
           <b>Build log</b>
           <pre>${LOG_BODY}</pre>
           
-          <b>Build finished in:</b> ${BUILD_DURATION_FMT
+          <b>Build finished in:</b> ${BUILD_DURATION_FMT}
           EOF
           )"
 
