@@ -1,0 +1,152 @@
+---
+proxy-providers:
+  Server Akun VPN:
+    type: file
+    path: "./proxy_provider/vpn.yaml"
+    health-check:
+      enable: true
+      url: http://cp.cloudflare.com/generate_204
+      interval: 20
+proxy-groups:
+- name: "⭐ G - UMUM"
+  type: select
+  proxies:
+  - "\U0001F349 Failover"
+  - "\U0001F951 Latency"
+  - "\U0001F34D Balance"
+  - "\U0001F95D Manual"
+  - DIRECT
+  disable-udp: false
+- name: "\U0001F349 Failover"
+  type: fallback
+  use:
+  - Server Akun VPN
+  disable-udp: false
+  url: http://cp.cloudflare.com/generate_204
+  interval: '30'
+- name: "\U0001F951 Latency"
+  type: url-test
+  use:
+  - Server Akun VPN
+  disable-udp: false
+  url: http://cp.cloudflare.com/generate_204
+  interval: '30'
+  tolerance: '50'
+- name: "\U0001F34D Balance"
+  type: load-balance
+  use:
+  - Server Akun VPN
+  strategy: consistent-hashing
+  disable-udp: false
+  url: http://cp.cloudflare.com/generate_204
+  interval: '30'
+- name: "\U0001F95D Manual"
+  type: select
+  use:
+  - Server Akun VPN
+  disable-udp: false
+rules:
+- DST-PORT,7895,REJECT
+- DST-PORT,7892,REJECT
+- "RULE-SET,Rule_Whatsapp,\U0001F951 Latency"
+- DST-PORT,443/80/8080,⭐ G - UMUM
+- MATCH,⭐ G - UMUM
+rule-providers:
+  Rule_Whatsapp:
+    type: file
+    behavior: classical
+    path: "./rule_provider/whatsapp.yaml"
+experimental:
+  ignore-resolve-fail: true
+  quic-go-disable-gso: true
+dns:
+  enable: true
+  ipv6: false
+  enhanced-mode: redir-host
+  listen: 0.0.0.0:7874
+  respect-rules: true
+  nameserver:
+  - 1.1.1.1
+  - 1.0.0.1
+  fallback:
+  - 8.8.8.8
+  - 8.8.4.4
+  default-nameserver:
+  - 1.1.1.1
+  - 1.0.0.1
+  proxy-server-nameserver:
+  - 1.1.1.1
+  - 1.0.0.1
+  - 8.8.8.8
+  - 8.8.4.4
+redir-port: 7892
+tproxy-port: 7895
+port: 7890
+socks-port: 7891
+mixed-port: 7893
+mode: rule
+allow-lan: true
+external-controller: 0.0.0.0:9090
+secret: mahavpn
+bind-address: "*"
+external-ui: "/usr/share/openclash/ui"
+external-ui-name: metacubexd
+external-ui-url: https://codeload.github.com/MetaCubeX/metacubexd/zip/refs/heads/gh-pages
+keep-alive-interval: 15
+keep-alive-idle: 600
+ipv6: false
+geodata-mode: true
+tcp-concurrent: true
+unified-delay: true
+geox-url: {}
+sniffer:
+  enable: true
+  override-destination: true
+  sniff:
+    QUIC:
+      ports:
+      - 443
+    TLS:
+      ports:
+      - 443
+      - 8443
+    HTTP:
+      ports:
+      - 80
+      - 8080-8880
+      override-destination: true
+  force-domain:
+  - "+.netflix.com"
+  - "+.nflxvideo.net"
+  - "+.amazonaws.com"
+  - "+.media.dssott.com"
+  skip-domain:
+  - Mijia Cloud
+  - dlg.io.mi.com
+  - "+.oray.com"
+  - "+.sunlogin.net"
+  - "+.push.apple.com"
+  force-dns-mapping: true
+  parse-pure-ip: true
+tun:
+  enable: true
+  stack: system
+  device: utun
+  dns-hijack:
+  - 127.0.0.1:53
+  endpoint-independent-nat: true
+  auto-route: false
+  auto-detect-interface: false
+  auto-redirect: false
+  strict-route: false
+  disable-icmp-forwarding: false
+profile:
+  store-selected: true
+ntp:
+  enable: true
+  server: time.apple.com
+  port: 123
+  interval: 30
+  write-to-system: true
+authentication:
+- Clash:mahavpn

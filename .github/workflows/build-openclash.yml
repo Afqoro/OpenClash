@@ -1,0 +1,359 @@
+name: Build OpenClash
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - 'luci-app-openclash/**'
+      - '.github/workflows/build-openclash.yml'
+
+permissions:
+  contents: read
+  actions: write
+  
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64_generic
+            sdk_target: armsr-armv8
+            sdk_path: armsr/armv8
+
+    env:
+      PACKAGE_NAME: luci-app-openclash
+      OPENWRT_SERIES: "24.10"
+      TZ: Asia/Jakarta
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v5
+
+      - name: Init build log
+        run: |
+          : > "$RUNNER_TEMP/build.log"
+          echo "BUILD_START_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+          echo "[$(date '+%H:%M:%S')] checkout....OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Read package version
+        run: |
+          PKG_VERSION=$(sed -n 's/^PKG_VERSION:=//p' luci-app-openclash/Makefile | head -n1 | tr -d '[:space:]')
+          if [ -z "$PKG_VERSION" ]; then
+            echo "[$(date '+%H:%M:%S')] read ver    FAIL" >> "$RUNNER_TEMP/build.log"
+            echo "PKG_VERSION not found in luci-app-openclash/Makefile"
+            exit 1
+          fi
+
+          echo "PKG_VERSION=$PKG_VERSION" >> "$GITHUB_ENV"
+          echo "IPK_NAME=luci-app-openclash_${PKG_VERSION}_all.ipk" >> "$GITHUB_ENV"
+
+          echo "Using PKG_VERSION=$PKG_VERSION"
+          echo "[$(date '+%H:%M:%S')] read ver....OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Install build dependencies
+        run: |
+          if sudo apt-get update && sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev rsync unzip zlib1g-dev \
+            file wget subversion swig time tar zstd python3 python3-pip python3-setuptools curl; then
+            echo "[$(date '+%H:%M:%S')] deps........OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] deps........FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+      - name: Resolve latest OpenWrt SDK
+        id: resolve_sdk
+        uses: Afqoro/Openwrt-Sdk-ResolverKu@main
+        with:
+          sdk_path: ${{ matrix.sdk_path }}
+          sdk_target: ${{ matrix.sdk_target }}
+          openwrt_series: ${{ env.OPENWRT_SERIES }}
+    
+      - name: Restore SDK cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.resolve_sdk.outputs.sdk_archive }}
+          key: ${{ steps.resolve_sdk.outputs.sdk_cache_key }}
+
+      - name: Download OpenWrt SDK
+        run: |
+          SDK_ARCHIVE="${{ steps.resolve_sdk.outputs.sdk_archive }}"
+          SDK_URL="${{ steps.resolve_sdk.outputs.sdk_url }}"
+
+          if [ ! -f "$SDK_ARCHIVE" ]; then
+            if ! wget -O "$SDK_ARCHIVE" "$SDK_URL"; then
+              echo "[$(date '+%H:%M:%S')] sdk dl......FAIL" >> "$RUNNER_TEMP/build.log"
+              exit 1
+            fi
+          fi
+
+          ls -lh "$SDK_ARCHIVE"
+          echo "[$(date '+%H:%M:%S')] sdk dl......OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Delete stale SDK caches for same target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          CURRENT_KEY: ${{ steps.resolve_sdk.outputs.sdk_cache_key }}
+          PREFIX: ${{ steps.resolve_sdk.outputs.sdk_cache_prefix }}
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+          import urllib.request
+
+          repo = os.environ["REPO"]
+          token = os.environ["GH_TOKEN"]
+          current_key = os.environ["CURRENT_KEY"]
+          prefix = os.environ["PREFIX"]
+
+          owner, name = repo.split("/", 1)
+          base = f"https://api.github.com/repos/{owner}/{name}/actions/caches?per_page=100"
+
+          req = urllib.request.Request(
+              base,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2022-11-28",
+              },
+          )
+
+          try:
+              with urllib.request.urlopen(req) as resp:
+                  data = json.load(resp)
+          except Exception as e:
+              print(f"Cache list skipped: {e}")
+              sys.exit(0)
+
+          caches = data.get("actions_caches", [])
+          stale = [
+              c for c in caches
+              if c.get("key", "").startswith(prefix) and c.get("key") != current_key
+          ]
+
+          if not stale:
+              print("No stale SDK caches to delete.")
+              sys.exit(0)
+
+          for c in stale:
+              cache_id = c["id"]
+              key = c.get("key", "")
+              url = f"https://api.github.com/repos/{owner}/{name}/actions/caches/{cache_id}"
+              req = urllib.request.Request(
+                  url,
+                  method="DELETE",
+                  headers={
+                      "Accept": "application/vnd.github+json",
+                      "Authorization": f"Bearer {token}",
+                      "X-GitHub-Api-Version": "2022-11-28",
+                  },
+              )
+              try:
+                  with urllib.request.urlopen(req) as resp:
+                      status = getattr(resp, "status", None)
+                  print(f"Deleted stale cache: {key} (id={cache_id}, status={status})")
+              except Exception as e:
+                  print(f"Failed to delete cache {key} (id={cache_id}): {e}")
+          PY
+
+          echo "[$(date '+%H:%M:%S')] sdk cache...OK" >> "$RUNNER_TEMP/build.log"
+          
+      - name: Extract OpenWrt SDK
+        run: |
+          SDK_ARCHIVE="${{ steps.resolve_sdk.outputs.sdk_archive }}"
+
+          find . -maxdepth 1 -type d -name 'openwrt-sdk-*' -exec rm -rf {} +
+
+          if ! tar --use-compress-program=unzstd -xf "$SDK_ARCHIVE"; then
+            echo "[$(date '+%H:%M:%S')] sdk xtract..FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+          SDK_DIR=$(find . -maxdepth 1 -type d -name "openwrt-sdk-*" | head -n 1)
+
+          if [ -z "$SDK_DIR" ]; then
+            echo "[$(date '+%H:%M:%S')] sdk xtract..FAIL" >> "$RUNNER_TEMP/build.log"
+            echo "SDK_DIR not found after extraction"
+            exit 1
+          fi
+
+          echo "SDK_DIR=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "Using SDK_DIR=$SDK_DIR"
+          echo "[$(date '+%H:%M:%S')] sdk xtract..OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Prepare custom feed package
+        run: |
+          mkdir -p "$SDK_DIR/package/custom"
+          rm -rf "$SDK_DIR/package/custom/luci-app-openclash"
+          cp -r "$GITHUB_WORKSPACE/luci-app-openclash" "$SDK_DIR/package/custom/luci-app-openclash"
+          echo "[$(date '+%H:%M:%S')] prep feed...OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Build and install po2lmo
+        run: |
+          set -eux
+
+          PO2LMO_DIR="$SDK_DIR/package/custom/luci-app-openclash/tools/po2lmo"
+
+          if [ ! -d "$PO2LMO_DIR" ]; then
+            echo "[$(date '+%H:%M:%S')] po2lmo      FAIL" >> "$RUNNER_TEMP/build.log"
+            echo "po2lmo source dir not found: $PO2LMO_DIR"
+            exit 1
+          fi
+
+          make -C "$PO2LMO_DIR"
+
+          mkdir -p "$SDK_DIR/staging_dir/host/bin"
+
+          if [ -f "$PO2LMO_DIR/src/po2lmo" ]; then
+            install -m0755 "$PO2LMO_DIR/src/po2lmo" "$SDK_DIR/staging_dir/host/bin/po2lmo"
+          elif [ -f "$PO2LMO_DIR/po2lmo" ]; then
+            install -m0755 "$PO2LMO_DIR/po2lmo" "$SDK_DIR/staging_dir/host/bin/po2lmo"
+          else
+            echo "[$(date '+%H:%M:%S')] po2lmo......FAIL" >> "$RUNNER_TEMP/build.log"
+            echo "Built po2lmo binary not found"
+            find "$PO2LMO_DIR" -maxdepth 3 -type f
+            exit 1
+          fi
+
+          "$SDK_DIR/staging_dir/host/bin/po2lmo" --help || true
+          echo "[$(date '+%H:%M:%S')] po2lmo......OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Update feeds
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          if ./scripts/feeds update -a && ./scripts/feeds install luci; then
+            echo "[$(date '+%H:%M:%S')] feeds.......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] feeds.......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+      - name: Generate config
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          echo "CONFIG_PACKAGE_luci-app-openclash=m" >> .config
+          if make defconfig; then
+            echo "[$(date '+%H:%M:%S')] defconfig...OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] defconfig...FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+      - name: Build package
+        working-directory: ${{ env.SDK_DIR }}
+        run: |
+          export PATH="$PWD/staging_dir/host/bin:$PATH"
+          which po2lmo || true
+
+          if make package/custom/luci-app-openclash/compile V=s -j"$(nproc)"; then
+            echo "[$(date '+%H:%M:%S')] build.......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] build.......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+      - name: Locate built IPK
+        run: |
+          IPK_PATH=$(find "$SDK_DIR/bin/packages" -type f -name 'luci-app-openclash_*.ipk' | head -n 1)
+
+          if [ -z "$IPK_PATH" ]; then
+            echo "[$(date '+%H:%M:%S')] locate ipk..FAIL" >> "$RUNNER_TEMP/build.log"
+            echo "IPK file not found"
+            exit 1
+          fi
+
+          echo "IPK_PATH=$IPK_PATH" >> "$GITHUB_ENV"
+          echo "Using IPK_PATH=$IPK_PATH"
+          ls -lh "$IPK_PATH"
+          echo "[$(date '+%H:%M:%S')] locate ipk..OK" >> "$RUNNER_TEMP/build.log"
+
+      - name: Generate SHA256
+        run: |
+          if sha256sum "$IPK_PATH" | awk '{print $1}' > sha256.txt; then
+            echo "SHA256=$(cat sha256.txt)" >> "$GITHUB_ENV"
+            cat sha256.txt
+            echo "[$(date '+%H:%M:%S')] sha256......OK" >> "$RUNNER_TEMP/build.log"
+          else
+            echo "[$(date '+%H:%M:%S')] sha256......FAIL" >> "$RUNNER_TEMP/build.log"
+            exit 1
+          fi
+
+      - name: Upload IPK to API endpoint
+        env:
+          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
+          UPLOAD_API_KEY: ${{ secrets.UPLOAD_API_KEY }}
+        run: |
+          echo "[$(date '+%H:%M:%S')] upload      OK" >> "$RUNNER_TEMP/build.log"
+          LOG_BODY="$(cat "$RUNNER_TEMP/build.log")"
+
+          BUILD_END_EPOCH="$(date +%s)"
+          BUILD_DURATION_SEC="$((BUILD_END_EPOCH - BUILD_START_EPOCH))"
+          BUILD_DURATION_FMT="$(printf '%02d:%02d:%02d' \
+            $((BUILD_DURATION_SEC / 3600)) \
+            $(((BUILD_DURATION_SEC % 3600) / 60)) \
+            $((BUILD_DURATION_SEC % 60)))"
+            
+          CAPTION="$(cat <<EOF
+          <b>OpenClash build uploaded</b>
+          <b>Mod by:</b> MahaVPN
+
+          <b>● File:</b> $PACKAGE_NAME
+          <b>● Version:</b> $PKG_VERSION
+
+          <b>● Archive:</b> <code>$(basename "$IPK_PATH")</code>
+          
+          <b>Build log</b>
+          <pre>${LOG_BODY}</pre>
+          
+          <b>Build finished in:</b> ${BUILD_DURATION_FMT}
+          EOF
+          )"
+
+          RESPONSE="$(
+            curl --fail --show-error --silent \
+              -X POST "$UPLOAD_URL" \
+              -H "Authorization: Bearer $UPLOAD_API_KEY" \
+              -F "file=@$IPK_PATH" \
+              -F "category=ipk_mod_public" \
+              -F "subfolder=${{ matrix.arch }}" \
+              -F "repository=${{ github.repository }}" \
+              -F "sha256=${SHA256}" \
+              -F "notify_telegram=1" \
+              -F "telegram_conf_path=${{ secrets.TELEGRAM_CONF_PATH }}" \
+              -F "pkg_name=$PACKAGE_NAME" \
+              -F "pkg_version=$PKG_VERSION" \
+              -F "arch=${{ matrix.arch }}" \
+              -F "mod_name=Afqoro" \
+              --form-string "caption=$CAPTION"
+          )"
+          
+          python3 - <<'PY' "$RESPONSE"
+          import json, sys
+          data = json.loads(sys.argv[1])
+          print(f"{data.get('success')} - {data.get('message')}")
+          if data.get("data"):
+              import json as _json
+              print(_json.dumps(data["data"], indent=2))
+          PY
+
+      - name: Upload artifact to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclash-${{ matrix.arch }}-${{ env.PKG_VERSION }}
+          path: ${{ env.IPK_PATH }}
+
+      - name: Done
+        run: |
+          echo "[$(date '+%H:%M:%S')] success.....OK" >> "$RUNNER_TEMP/build.log"
+          echo "Build uploaded successfully"
