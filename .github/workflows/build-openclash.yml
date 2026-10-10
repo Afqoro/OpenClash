@@ -2,6 +2,11 @@ name: Build OpenClash
 
 on:
   workflow_dispatch:
+    inputs:
+      publish:
+        description: 'Upload IPK ke endpoint + kirim Telegram'
+        type: boolean
+        default: false
   push:
     branches:
       - master
@@ -290,6 +295,7 @@ jobs:
           fi
 
       - name: Upload IPK to API endpoint
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
         env:
           UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
           UPLOAD_API_KEY: ${{ secrets.UPLOAD_API_KEY }}
