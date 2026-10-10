@@ -2,11 +2,6 @@ name: Build OpenClash
 
 on:
   workflow_dispatch:
-    inputs:
-      publish:
-        description: 'Upload IPK ke endpoint + kirim Telegram'
-        type: boolean
-        default: false
   push:
     branches:
       - master
@@ -294,70 +289,12 @@ jobs:
             exit 1
           fi
 
-      - name: Upload IPK to API endpoint
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish == true }}
-        env:
-          UPLOAD_URL: ${{ secrets.UPLOAD_URL }}
-          UPLOAD_API_KEY: ${{ secrets.UPLOAD_API_KEY }}
-        run: |
-          echo "[$(date '+%H:%M:%S')] upload      OK" >> "$RUNNER_TEMP/build.log"
-          LOG_BODY="$(cat "$RUNNER_TEMP/build.log")"
-
-          BUILD_END_EPOCH="$(date +%s)"
-          BUILD_DURATION_SEC="$((BUILD_END_EPOCH - BUILD_START_EPOCH))"
-          BUILD_DURATION_FMT="$(printf '%02d:%02d:%02d' \
-            $((BUILD_DURATION_SEC / 3600)) \
-            $(((BUILD_DURATION_SEC % 3600) / 60)) \
-            $((BUILD_DURATION_SEC % 60)))"
-            
-          CAPTION="$(cat <<EOF
-          <b>OpenClash build uploaded</b>
-          <b>Mod by:</b> MahaVPN
-
-          <b>● File:</b> $PACKAGE_NAME
-          <b>● Version:</b> $PKG_VERSION
-
-          <b>● Archive:</b> <code>$(basename "$IPK_PATH")</code>
-          
-          <b>Build log</b>
-          <pre>${LOG_BODY}</pre>
-          
-          <b>Build finished in:</b> ${BUILD_DURATION_FMT}
-          EOF
-          )"
-
-          RESPONSE="$(
-            curl --fail --show-error --silent \
-              -X POST "$UPLOAD_URL" \
-              -H "Authorization: Bearer $UPLOAD_API_KEY" \
-              -F "file=@$IPK_PATH" \
-              -F "category=ipk_mod_public" \
-              -F "subfolder=${{ matrix.arch }}" \
-              -F "repository=${{ github.repository }}" \
-              -F "sha256=${SHA256}" \
-              -F "notify_telegram=1" \
-              -F "telegram_conf_path=${{ secrets.TELEGRAM_CONF_PATH }}" \
-              -F "pkg_name=$PACKAGE_NAME" \
-              -F "pkg_version=$PKG_VERSION" \
-              -F "arch=${{ matrix.arch }}" \
-              -F "mod_name=Afqoro" \
-              --form-string "caption=$CAPTION"
-          )"
-          
-          python3 - <<'PY' "$RESPONSE"
-          import json, sys
-          data = json.loads(sys.argv[1])
-          print(f"{data.get('success')} - {data.get('message')}")
-          if data.get("data"):
-              import json as _json
-              print(_json.dumps(data["data"], indent=2))
-          PY
-
       - name: Upload artifact to GitHub
         uses: actions/upload-artifact@v4
         with:
           name: openclash-${{ matrix.arch }}-${{ env.PKG_VERSION }}
           path: ${{ env.IPK_PATH }}
+          retention-days: 1
 
       - name: Done
         run: |
