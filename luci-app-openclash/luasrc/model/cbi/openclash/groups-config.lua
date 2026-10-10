@@ -30,7 +30,7 @@ function IsYmlFile(e)
 	return e == ".yml"
 end
 
-m = Map(openclash)
+m = Map(openclash, translate("Edit Group"))
 m.pageaction = false
 m.redirect = DISP.build_url("admin/services/openclash/servers") .. "?file=" .. HTTP.urlencode(file_path)
 if m.uci:get(openclash, sid) ~= "groups" then
@@ -51,7 +51,7 @@ for t,f in ipairs(fs.glob("/etc/openclash/config/*"))do
 	if a then
 		e[t]={}
 		e[t].name=fs.basename(f)
-		if IsYamlFile(e[t].name) or IsYmlFile(e[t].name) then
+		if fs.IsYamlExt(e[t].name) then
 			o:value(e[t].name)
 		end
 	end

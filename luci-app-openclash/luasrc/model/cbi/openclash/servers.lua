@@ -179,6 +179,7 @@ o.write = function()
 		end
 	end)
 	m.uci:commit("openclash")
+	HTTP.redirect(m.redirect)
 end
 
 o = b:option(Button,"Delete_Servers", " ")
@@ -187,6 +188,7 @@ o.inputstyle = "reset"
 o.write = function()
 	m.uci:delete_all("openclash", "servers", function(s) return true end)
 	m.uci:commit("openclash")
+	HTTP.redirect(m.redirect)
 end
 
 o = b:option(Button,"Delete_Proxy_Provider", " ")
@@ -195,6 +197,7 @@ o.inputstyle = "reset"
 o.write = function()
 	m.uci:delete_all("openclash", "proxy-provider", function(s) return true end)
 	m.uci:commit("openclash")
+	HTTP.redirect(m.redirect)
 end
 
 o = b:option(Button,"Delete_Groups", " ")
@@ -203,6 +206,7 @@ o.inputstyle = "reset"
 o.write = function()
 	m.uci:delete_all("openclash", "groups", function(s) return true end)
 	m.uci:commit("openclash")
+	HTTP.redirect(m.redirect)
 end
 
 local t = {

@@ -41,7 +41,7 @@ if [ "$1" = "fake-ip" ] && [ "$enable_redirect_dns" != "2" ]; then
       awk -v mode="$fake_ip_filter_mode" '
          !/^$/ && !/^#/ {
             # 跳过IPv4和IPv6地址
-            if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || $0 ~ /:/) {
+            if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\/[0-9]+)?$/ || $0 ~ /:/) {
                next
             }
             if (mode == "blacklist") {
@@ -166,6 +166,7 @@ sys_dns_append()
 PROXY_GROUPS=$(ruby -ryaml -rYAML -I "/usr/share/openclash" -E UTF-8 -e "
    begin
       Value = YAML.load_file('$CONFIG_FILE')
+      File.open('/tmp/yaml_change_marshal', 'wb') { |f| Marshal.dump(Value, f) }
       if Value.key?('proxy-groups') && Value['proxy-groups'].is_a?(Array)
          Value['proxy-groups'].each { |x| puts x['name'] if x.key?('name') }
       end
@@ -328,7 +329,15 @@ end
 
 begin
    config_file = '$5'
-   Value = YAML.load_file(config_file)
+   if File.exist?('/tmp/yaml_change_marshal')
+      begin
+         Value = Marshal.load(File.open('/tmp/yaml_change_marshal', 'rb') { |f| f.read })
+      rescue
+         Value = YAML.load_file(config_file)
+      end
+   else
+      Value = YAML.load_file(config_file)
+   end
 rescue Exception => e
    YAML.LOG_ERROR('Load File Failed,【%s】' % [e.message])
    exit
@@ -379,6 +388,7 @@ begin
    smart_collect_size = '${45}'
    fake_ip_range6 = '${46}'
    fake_ip_range6_enable = '${47}' == '1'
+   global_ua = '${48}'
    default_dashboard = '$default_dashboard'
    yacd_type = '$yacd_type'
    dashboard_type = '$dashboard_type'
@@ -409,6 +419,7 @@ begin
          Value['external-controller'] = '0.0.0.0:' + controller_port
          Value['secret'] = secret
          Value['bind-address'] = '*'
+         Value['global-ua'] = global_ua if global_ua != '0'
          Value['external-ui'] = '/usr/share/openclash/ui'
          Value['external-ui-name'] = default_dashboard
          case default_dashboard
@@ -425,9 +436,9 @@ begin
             Value['external-ui-url'] = 'https://codeload.github.com/MetaCubeX/Yacd-meta/zip/refs/heads/gh-pages'
          end
          when 'metacubexd'
-         Value['external-ui-url'] = 'https://codeload.github.com/MetaCubeX/metacubexd/zip/refs/heads/gh-pages'
+            Value['external-ui-url'] = 'https://codeload.github.com/MetaCubeX/metacubexd/zip/refs/heads/gh-pages'
          when 'zashboard'
-         Value['external-ui-url'] = 'https://codeload.github.com/Zephyruso/zashboard/zip/refs/heads/gh-pages-cdn-fonts'
+            Value['external-ui-url'] = 'https://codeload.github.com/Zephyruso/zashboard/zip/refs/heads/gh-pages-cdn-fonts'
          end
          if !Value.key?('keep-alive-interval') && !Value.key?('keep-alive-idle')
             Value['keep-alive-interval'] = 15
@@ -454,7 +465,7 @@ begin
          end
 
          if smart_collect
-         (Value['profile'] ||= {})['smart-collector-size'] = smart_collect_size.to_f
+            (Value['profile'] ||= {})['smart-collector-size'] = smart_collect_size.to_f
          end
 
          Value['geox-url'] ||= {}
@@ -658,14 +669,13 @@ begin
          end
          if fake_ip_mode == 'fake-ip' && (china_ip_route || china_ip6_route)
             filter_mode = Value.dig('dns', 'fake-ip-filter-mode')
-            filters = Value.dig('dns', 'fake-ip-filter') || []
-            deleted_filters = filters.select { |f| f =~ /(geosite:?|rule-set:?).*(@cn|:cn|,cn|:china)/i }
             if filter_mode == 'blacklist' || filter_mode.nil?
-               if !deleted_filters.any?
-                  (Value['dns']['fake-ip-filter'] ||= []) << 'geosite:cn'
-                  YAML.LOG_TIP('Because Need Ensure Bypassing IP Option Work, Added The Fake-IP-Filter Rule【geosite:cn】...')
-               end
-            else
+               filter_rule = 'rule-set:oc-cn-domain'
+               (Value['dns']['fake-ip-filter'] ||= []) << filter_rule
+            end
+            if filter_mode == 'whitelist'
+               filters = Value.dig('dns', 'fake-ip-filter') || []
+               deleted_filters = filters.select { |f| f =~ /(geosite:?|rule-set:?).*(@cn|:cn|,cn|:china)/i }
                if deleted_filters.any?
                   Value['dns']['fake-ip-filter'] -= deleted_filters
                   deleted_filters.each do |f|
@@ -674,8 +684,14 @@ begin
                end
             end
             if filter_mode == 'rule'
-               (Value['dns']['fake-ip-filter'] ||= []).unshift('GEOSITE,cn,real-ip')
-               YAML.LOG_TIP('Because Need Ensure Bypassing IP Option Work, Added The Fake-IP-Filter Rule【GEOSITE,cn,real-ip】...')
+               filter_rule = 'RULE-SET,oc-cn-domain,real-ip'
+               (Value['dns']['fake-ip-filter'] ||= []).unshift(filter_rule)
+            end
+            Value['dns']['fake-ip-filter'].uniq!
+            if filter_mode != 'whitelist'
+               rule_set_hash = {'rule-providers+'=>{'oc-cn-domain'=>{'type'=>'http', 'interval'=>43200, 'behavior'=>'domain', 'format'=>'mrs', 'url'=>'https://raw.githubusercontent.com/MetaCubeX/meta-rules-dat/meta/geo/geosite/cn.mrs', 'path'=> './rule_provider/oc-cn-domain.mrs'}}}
+               Value = YAML.overwrite(Value, rule_set_hash)
+               YAML.LOG_TIP('Because Need Ensure Bypassing IP Option Work, Added The Fake-IP-Filter Rule【%s】...' % [filter_rule])
             end
          end
       rescue Exception => e
@@ -803,6 +819,11 @@ begin
 rescue Exception => e
    YAML.LOG_ERROR('Config File Overwrite Failed,【%s】' % [e.message])
 ensure
-   File.open(config_file, 'w') { |f| YAML.dump(Value, f) }
+   begin
+      YAML.dump(Value, config_file)
+   rescue Exception => e
+      YAML.LOG_ERROR('Write file failed:【%s】' % [e.message])
+   end
+   File.delete('/tmp/yaml_change_marshal') rescue nil
 end
 " 2>/dev/null >> $LOG_FILE
